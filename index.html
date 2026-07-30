@@ -1504,7 +1504,7 @@ document.addEventListener('click',e=>{
   }
 });
 function renderWeight(){
-  heightCm=+$('wtHeight').value||160; cloudSave('heightCm',{v:heightCm});
+  const wtEl=$('wtHeight'); heightCm=wtEl?(+wtEl.value||160):heightCm; cloudSave('heightCm',{v:heightCm});
   $('wtMonthLabel').textContent=wtYear+'年'+(wtMonth+1)+'月';
   const first=new Date(wtYear,wtMonth,1);
   const startDow=(first.getDay()+6)%7;
@@ -1810,7 +1810,7 @@ function renderAll(){
 if(window.innerWidth<820) document.body.classList.add('nav-collapsed');
 $('todayStr').textContent=new Date().toLocaleDateString('zh-CN',{year:'numeric',month:'long',day:'numeric',weekday:'long'});
 $('dDate').value=todayStr(); $('dViewDate').value=todayStr(); $('todoDue').value=todayStr();
-$('lgDate').value=todayStr(); $('wtHeight').value=heightCm;
+$('lgDate').value=todayStr(); $('wtHeight') && ($('wtHeight').value=heightCm);
 renderCatQuick(); renderTodos(); renderMatrix(); renderHotspots(); renderIdeas(); renderDiet(); renderDietCalendar(); renderHome(); renderLedger(); renderWeight(); renderPhotos();
 </script>
 </div>
