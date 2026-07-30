@@ -724,7 +724,7 @@
       </div>
       <div class="pg-row">
         <input class="pg-inp" id="pgTags" placeholder="标签，用空格或逗号分隔，如：旅行 美食 日常">
-        <button class="btn-p btn-sm" onclick="publishPhoto()">发布</button>
+        <button id="pgPublishBtn" class="btn-p btn-sm" onclick="publishPhoto()">发布</button>
       </div>
       <div class="pg-preview" id="pgPreview"></div>
       <div class="pg-tip">数据通过 Supabase 加密云同步，仅自己可见 · 可累积记录，也可 <a onclick="clearPhotos()">清空全部</a></div>
@@ -1556,30 +1556,6 @@ function renderWeight(){
 }
 
 /* ================= 照片记录（朋友圈式时间线） ================= */
-// 本地存储：优先 IndexedDB（可存大图），失败则回退 localStorage
-const PhotoDB=(()=>{
-  let db=null, useLS=false;
-  function open(){
-    return new Promise(res=>{
-      if(db||useLS) return res();
-      try{
-        const req=indexedDB.open('wb_photos',1);
-        req.onupgradeneeded=e=>{const d=e.target.result;if(!d.objectStoreNames.contains('posts'))d.createObjectStore('posts',{keyPath:'id'});};
-        req.onsuccess=e=>{db=e.target.result;res();};
-        req.onerror=()=>{useLS=true;res();};
-      }catch(e){useLS=true;res();}
-    });
-  }
-  async function all(){await open();if(useLS)return load('wb_photos',[]);
-    return new Promise(res=>{try{const tx=db.transaction('posts','readonly');const r=tx.objectStore('posts').getAll();r.onsuccess=()=>res(r.result||[]);r.onerror=()=>res([]);}catch(e){res([]);}});}
-  async function put(post){await open();if(useLS){const a=load('wb_photos',[]);const i=a.findIndex(x=>x.id===post.id);if(i>=0)a[i]=post;else a.unshift(post);save('wb_photos',a);return;}
-    return new Promise(res=>{try{const tx=db.transaction('posts','readwrite');tx.objectStore('posts').put(post);tx.oncomplete=()=>res();tx.onerror=()=>res();}catch(e){res();}});}
-  async function del(id){await open();if(useLS){save('wb_photos',load('wb_photos',[]).filter(x=>x.id!==id));return;}
-    return new Promise(res=>{try{const tx=db.transaction('posts','readwrite');tx.objectStore('posts').delete(id);tx.oncomplete=()=>res();tx.onerror=()=>res();}catch(e){res();}});}
-  async function clearAll(){await open();if(useLS){save('wb_photos',[]);return;}
-    return new Promise(res=>{try{const tx=db.transaction('posts','readwrite');tx.objectStore('posts').clear();tx.oncomplete=()=>res();tx.onerror=()=>res();}catch(e){res();}});}
-  return {all,put,del,clearAll};
-})();
 
 // 图片压缩：缩放至最大边 maxDim，输出 jpeg dataURL，控制体积
 function fileToDataURL(file,maxDim,quality){
@@ -1598,6 +1574,30 @@ function fileToDataURL(file,maxDim,quality){
     };
     fr.onerror=rej;fr.readAsDataURL(file);
   });
+}
+
+// 上传图片到 Supabase Storage
+async function uploadPhoto(file, userId) {
+  const compressed = await fileToDataURL(file, 1080, 0.82);
+  // Convert dataURL to Blob
+  const res = await fetch(compressed);
+  const blob = await res.blob();
+  const ext = file.name.split('.').pop() || 'jpg';
+  const filename = `${Date.now()}_${Math.random().toString(36).slice(2,6)}.${ext}`;
+  const path = `${userId}/${filename}`;
+
+  const { data, error } = await supabase.storage
+    .from('photos')
+    .upload(path, blob, { contentType: 'image/jpeg', upsert: false });
+
+  if (error) throw error;
+
+  // Get public URL
+  const { data: { publicUrl } } = supabase.storage
+    .from('photos')
+    .getPublicUrl(path);
+
+  return { path, url: publicUrl };
 }
 
 function esc(s){return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
@@ -1625,60 +1625,153 @@ function previewFiles(){
 }
 
 async function publishPhoto(){
-  const text=$('pgText').value.trim();
-  const loc=$('pgLoc').value.trim();
-  const tagsRaw=$('pgTags').value.trim();
-  const files=$('pgFiles').files;
-  if(!text && files.length===0){alert('写点什么，或选一张照片吧～');return;}
-  const imgs=[];
-  for(const f of files){ if(f.type.startsWith('image/')) imgs.push(await fileToDataURL(f,1080,0.82)); }
-  const post={id:uid(),ts:Date.now(),text,loc,tags:tagsRaw?tagsRaw.split(/[,，\s]+/).filter(Boolean):[],imgs};
-  await PhotoDB.put(post);
-  $('pgText').value='';$('pgLoc').value='';$('pgTags').value='';$('pgFiles').value='';$('pgPreview').innerHTML='';
-  renderPhotos();
+  const text = $('pgText').value.trim();
+  const loc = $('pgLoc').value.trim();
+  const tagsRaw = $('pgTags').value.trim();
+  const files = $('pgFiles').files;
+  if(!text && files.length===0){ alert('写点什么，或选一张照片吧～'); return; }
+
+  const btn = $('pgPublishBtn');
+  if (btn) { btn.textContent = '上传中...'; btn.disabled = true; }
+
+  try {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) { alert('请先登录'); return; }
+
+    const imgs = [];
+    for(const f of files){
+      if(f.type.startsWith('image/')){
+        try {
+          const result = await uploadPhoto(f, user.id);
+          imgs.push({ url: result.url, path: result.path });
+        } catch(e) {
+          console.error('Photo upload failed:', e);
+        }
+      }
+    }
+
+    const post = {
+      id: uid(),
+      ts: Date.now(),
+      text,
+      loc,
+      tags: tagsRaw ? tagsRaw.split(/[,，\s]+/).filter(Boolean) : [],
+      imgs
+    };
+
+    // Load existing photos from cloud, add new one
+    let photos = await cloudLoad('photos', []);
+    photos.unshift(post);
+    await cloudSave('photos', photos);
+
+    $('pgText').value = '';
+    $('pgLoc').value = '';
+    $('pgTags').value = '';
+    $('pgFiles').value = '';
+    $('pgPreview').innerHTML = '';
+
+    renderPhotos();
+  } catch(e) {
+    alert('发布失败：' + (e.message || '未知错误'));
+  } finally {
+    if (btn) { btn.textContent = '发布'; btn.disabled = false; }
+  }
 }
 
 async function renderPhotos(){
-  let posts=await PhotoDB.all();
-  // 旧数据兼容：无发布时间字段的自动补录为当前时间
-  const needPatch=posts.filter(p=>!p.ts);
-  if(needPatch.length){
-    const base=Date.now()-needPatch.length*60000;
-    for(let i=0;i<needPatch.length;i++){ needPatch[i].ts=base+i*60000; await PhotoDB.put(needPatch[i]); }
-    posts=await PhotoDB.all();
+  let posts = await cloudLoad('photos', []);
+
+  // Sort by timestamp descending
+  posts.sort((a,b) => (b.ts || 0) - (a.ts || 0));
+  photoCount = posts.length;
+  renderHome();
+
+  const feed = $('pgFeed');
+  if(!posts.length){
+    feed.innerHTML = '<div class="moments-empty">还没有记录～<br>在上方写下第一条，像发朋友圈一样留住此刻 ✦</div>';
+    photoCount = 0;
+    renderHome();
+    return;
   }
-  posts.sort((a,b)=>b.ts-a.ts);
-  photoCount=posts.length; renderHome();
-  const feed=$('pgFeed');
-  if(!posts.length){feed.innerHTML='<div class="moments-empty">还没有记录～<br>在上方写下第一条，像发朋友圈一样留住此刻 ✦</div>';photoCount=0;renderHome();return;}
-  feed.innerHTML=posts.map(p=>{
-    const imgs=p.imgs||[];
-    const grid=imgs.length?`<div class="pg-grid n${Math.min(imgs.length,9)}">${imgs.map((s,i)=>`<img src="${s}" onclick="openLight('${p.id}',${i})" loading="lazy" alt="">`).join('')}</div>`:'';
-    const loc=p.loc?`<span class="pg-loc"><svg class="pin"><use href="#ic-pin"/></svg>${esc(p.loc)}</span>`:'';
-    const tags=p.tags.length?`<div class="pg-tags">${p.tags.map(t=>`<span class="pg-tag">#${esc(t)}</span>`).join('')}</div>`:'';
-    const d=momentDate(p.ts);
-    const dateHtml=d.year?`<div class="pg-day">${d.day}</div><div class="pg-mon">${d.mon}<span class="pg-year">${d.year}</span></div>`:`<div class="pg-day">${d.day}</div><div class="pg-mon">${d.mon}</div>`;
+
+  feed.innerHTML = posts.map(p => {
+    const imgs = p.imgs || [];
+    const grid = imgs.length
+      ? `<div class="pg-grid n${Math.min(imgs.length,9)}">${imgs.map((img,i) => `<img src="${esc(img.url || img)}" onclick="openLight('${p.id}',${i})" loading="lazy" alt="">`).join('')}</div>`
+      : '';
+    const loc = p.loc
+      ? `<span class="pg-loc"><svg class="pin"><use href="#ic-pin"/></svg>${esc(p.loc)}</span>`
+      : '';
+    const tags = (p.tags && p.tags.length)
+      ? `<div class="pg-tags">${p.tags.map(t => `<span class="pg-tag">#${esc(t)}</span>`).join('')}</div>`
+      : '';
+    const d = momentDate(p.ts);
+    const dateHtml = d.year
+      ? `<div class="pg-day">${d.day}</div><div class="pg-mon">${d.mon}<span class="pg-year">${d.year}</span></div>`
+      : `<div class="pg-day">${d.day}</div><div class="pg-mon">${d.mon}</div>`;
     return `<div class="pg-card">
       <div class="pg-date">${dateHtml}</div>
       <div class="pg-main">
         <div class="pg-header"><div class="pg-mini-ava">h</div><div class="pg-name">hamboo</div></div>
-        ${p.text?`<div class="pg-text">${esc(p.text).replace(/\n/g,'<br>')}</div>`:''}
+        ${p.text ? `<div class="pg-text">${esc(p.text).replace(/\n/g,'<br>')}</div>` : ''}
         ${grid}${tags}
         <div class="pg-meta">${loc}<span class="pg-time">${relTime(p.ts)}</span><span class="pg-del" onclick="delPhoto('${p.id}')">删除</span></div>
-      </div>
-    </div>`;
+      </div></div>`;
   }).join('');
+
+  // Clear global lightbox images for modal
+  window._allPosts = posts;
 }
 
-async function delPhoto(id){ if(!confirm('删除这条记录？')) return; await PhotoDB.del(id); renderPhotos(); }
-async function clearPhotos(){ if(!confirm('清空全部照片记录？此操作不可恢复')) return; await PhotoDB.clearAll(); renderPhotos(); }
+async function delPhoto(id){
+  if(!confirm('确定删除这条记录？')) return;
+
+  let photos = await cloudLoad('photos', []);
+  const post = photos.find(p => p.id === id);
+
+  // Delete images from Storage
+  if (post && post.imgs) {
+    for (const img of post.imgs) {
+      if (img.path) {
+        try {
+          await supabase.storage.from('photos').remove([img.path]);
+        } catch(e) { /* silent */ }
+      }
+    }
+  }
+
+  // Remove from metadata
+  photos = photos.filter(p => p.id !== id);
+  await cloudSave('photos', photos);
+
+  renderPhotos();
+}
+
+async function clearPhotos(){
+  if(!confirm('确定清空全部照片记录？此操作不可恢复！')) return;
+  let photos = await cloudLoad('photos', []);
+  for (const p of photos) {
+    if (p.imgs) {
+      for (const img of p.imgs) {
+        if (img.path) {
+          try { await supabase.storage.from('photos').remove([img.path]); } catch(e) {}
+        }
+      }
+    }
+  }
+  await cloudSave('photos', []);
+  renderPhotos();
+}
 
 // 灯箱
 let lightImgs=[],lightIdx=0;
-async function openLight(id,i){
-  const posts=await PhotoDB.all();
-  const p=posts.find(x=>x.id===id); if(!p) return;
-  lightImgs=p.imgs||[]; lightIdx=i; showLight();
+function openLight(postId, imgIdx){
+  const posts = window._allPosts || [];
+  const post = posts.find(p => p.id === postId);
+  if (!post || !post.imgs) return;
+  lightImgs = post.imgs.map(img => img.url || img);
+  lightIdx = imgIdx;
+  showLight();
 }
 function showLight(){ $('lightImg').src=lightImgs[lightIdx]; $('lightIdx').textContent=(lightIdx+1)+' / '+lightImgs.length; $('light').style.display='flex'; }
 function lightNav(d){ lightIdx=(lightIdx+d+lightImgs.length)%lightImgs.length; showLight(); }
@@ -1699,7 +1792,7 @@ async function importBackup(file){
       localStorage.setItem(k, typeof v==='string'?v:JSON.stringify(v));
     }
     let photos=Array.isArray(parsed.photos)?parsed.photos:(Array.isArray(obj['wb_photos'])?obj['wb_photos']:[]);
-    for(const p of photos){ await PhotoDB.put(p); }
+    if(photos.length){ await cloudSave('photos', photos); }
     alert('导入成功，即将刷新页面以加载数据');
     location.reload();
   }catch(e){
