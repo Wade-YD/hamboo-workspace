@@ -3,7 +3,7 @@
 
 // 从 Supabase 加载指定模块数据
 async function cloudLoad(module, defaultVal = null) {
-  const user = supabase.auth.user();
+  const { data: { user } } = await supabase.auth.getUser();
   if (!user) return defaultVal;
   
   const { data, error } = await supabase
@@ -22,7 +22,7 @@ async function cloudLoad(module, defaultVal = null) {
 
 // 保存数据到 Supabase（upsert）
 async function cloudSave(module, value) {
-  const user = supabase.auth.user();
+  const { data: { user } } = await supabase.auth.getUser();
   if (!user) return;
   
   const { error } = await supabase
@@ -39,7 +39,7 @@ async function cloudSave(module, value) {
 
 // ====== 初始化：从云端加载所有数据 ======
 async function initCloudData() {
-  const user = supabase.auth.user();
+  const { data: { user } } = await supabase.auth.getUser();
   if (!user) return;
 
   // 并行加载所有模块
@@ -91,8 +91,8 @@ async function initCloudData() {
 }
 
 // ====== 实时同步监听 ======
-function enableRealtime() {
-  const user = supabase.auth.user();
+async function enableRealtime() {
+  const { data: { user } } = await supabase.auth.getUser();
   if (!user) return;
 
   supabase

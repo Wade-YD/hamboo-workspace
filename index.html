@@ -752,6 +752,11 @@ const $=id=>document.getElementById(id);
 const todayStr=()=>new Date().toLocaleDateString('sv');  // YYYY-MM-DD
 const fmt=n=>n==null||n===''?'-':Number(n).toLocaleString();
 
+function load(key, defaultVal) {
+  try { const raw = localStorage.getItem(key); return raw ? JSON.parse(raw) : defaultVal; }
+  catch(e) { return defaultVal; }
+}
+
 // save 和 load 由 db.js 的 cloudSave / cloudLoad 替代
 
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,6);
