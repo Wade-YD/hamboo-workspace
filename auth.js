@@ -1,5 +1,5 @@
-// auth.js - 登录/注册逻辑
-let authMode = 'login'; // 'login' | 'register'
+// auth.js - 登录/注册逻辑（修复版：注册后自动登录）
+let authMode = 'login';
 
 function toggleAuthMode() {
   authMode = authMode === 'login' ? 'register' : 'login';
@@ -8,6 +8,12 @@ function toggleAuthMode() {
   document.getElementById('authSwitchText').textContent = authMode === 'login' ? '没有账号？' : '已有账号？';
   document.getElementById('authSwitchLink').textContent = authMode === 'login' ? '注册' : '登录';
   document.getElementById('authErr').textContent = '';
+}
+
+function resetBtn() {
+  const btn = document.getElementById('authBtn');
+  btn.textContent = authMode === 'login' ? '登录' : '注册';
+  btn.disabled = false;
 }
 
 async function authSubmit() {
@@ -25,25 +31,46 @@ async function authSubmit() {
   btn.disabled = true;
   errEl.textContent = '';
 
-  let result;
-  if (authMode === 'login') {
-    result = await supabase.auth.signInWithPassword({ email, password });
-  } else {
-    result = await supabase.auth.signUp({ email, password });
-    if (!result.error && result.data.user) {
-      errEl.textContent = '注册成功！请查看邮箱确认（如未收到检查垃圾邮件）';
-      btn.textContent = authMode === 'login' ? '登录' : '注册';
-      btn.disabled = false;
+  try {
+    if (authMode === 'register') {
+      // 注册
+      const { data, error } = await supabase.auth.signUp({ email, password });
+      if (error) {
+        if (error.message.includes('already registered') || error.message.includes('already exists')) {
+          errEl.textContent = '该邮箱已注册，请切换到「登录」';
+        } else {
+          errEl.textContent = error.message;
+        }
+        resetBtn();
+        return;
+      }
+      // 注册成功，如果 session 存在（未开邮件确认），自动进入
+      if (data.session) {
+        // 有 session，onAuthStateChange 会自动触发
+        return;
+      }
+      // 需要邮件确认
+      errEl.textContent = '注册成功！如开启邮件确认，请查收验证邮件后登录。';
+      // 自动切换到登录模式
+      toggleAuthMode();
+      resetBtn();
       return;
     }
-  }
 
-  if (result.error) {
-    errEl.textContent = result.error.message || '操作失败，请重试';
-    btn.textContent = authMode === 'login' ? '登录' : '注册';
-    btn.disabled = false;
+    // 登录
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) {
+      errEl.textContent = error.message === 'Invalid login credentials' 
+        ? '邮箱或密码错误，请重试' 
+        : error.message;
+      resetBtn();
+      return;
+    }
+    // 登录成功，onAuthStateChange 自动触发
+  } catch (e) {
+    errEl.textContent = '网络错误，请检查连接后重试';
+    resetBtn();
   }
-  // 登录成功后 auth state change 会自动触发
 }
 
 // 监听认证状态
@@ -51,14 +78,13 @@ supabase.auth.onAuthStateChange(async (event, session) => {
   if (session) {
     document.getElementById('auth-overlay').classList.add('hidden');
     document.getElementById('app-content').classList.remove('hidden');
-    await initCloudData(); // 在 db.js 中定义
+    await initCloudData();
   } else {
     document.getElementById('auth-overlay').classList.remove('hidden');
     document.getElementById('app-content').classList.add('hidden');
   }
 });
 
-// 登出（供外部调用）
 async function logout() {
   await supabase.auth.signOut();
 }
