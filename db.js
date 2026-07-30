@@ -20,21 +20,42 @@ async function cloudLoad(module, defaultVal = null) {
   return data ? data.data : defaultVal;
 }
 
-// 保存数据到 Supabase（upsert）
+// 保存数据到 Supabase（先查后写，避免依赖数据库唯一约束）
 async function cloudSave(module, value) {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return;
   
-  const { error } = await supabase
-    .from('workspace_data')
-    .upsert({
-      user_id: user.id,
-      module: module,
-      data: value,
-      updated_at: new Date().toISOString()
-    }, { onConflict: 'user_id, module' });
-  
-  if (error) console.error('cloudSave error:', module, error);
+  try {
+    // 先查询是否已有该模块的记录
+    const { data: existing } = await supabase
+      .from('workspace_data')
+      .select('id')
+      .eq('user_id', user.id)
+      .eq('module', module)
+      .maybeSingle();
+    
+    if (existing) {
+      // 更新已有记录
+      const { error } = await supabase
+        .from('workspace_data')
+        .update({ data: value, updated_at: new Date().toISOString() })
+        .eq('id', existing.id);
+      if (error) console.error('cloudSave update error:', module, error);
+    } else {
+      // 插入新记录
+      const { error } = await supabase
+        .from('workspace_data')
+        .insert({
+          user_id: user.id,
+          module: module,
+          data: value,
+          updated_at: new Date().toISOString()
+        });
+      if (error) console.error('cloudSave insert error:', module, error);
+    }
+  } catch (e) {
+    console.error('cloudSave error:', module, e);
+  }
 }
 
 // ====== 初始化：从云端加载所有数据 ======
