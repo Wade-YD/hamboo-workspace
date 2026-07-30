@@ -1801,6 +1801,10 @@ async function importBackup(file){
     $('backupFile').value='';
   }
 }
+/* ================= 渲染全部模块 ================= */
+function renderAll(){
+  renderCatQuick(); renderTodos(); renderMatrix(); renderHotspots(); renderIdeas(); renderDiet(); renderDietCalendar(); renderHome(); renderLedger(); renderWeight(); renderPhotos();
+}
 /* ================= 启动 ================= */
 /* 窄屏（手机/iPad 竖屏）默认收起侧栏，避免挤占内容 */
 if(window.innerWidth<820) document.body.classList.add('nav-collapsed');
