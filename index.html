@@ -1504,7 +1504,7 @@ document.addEventListener('click',e=>{
   }
 });
 function renderWeight(){
-  const wtEl=$('wtHeight'); heightCm=wtEl?(+wtEl.value||160):heightCm; cloudSave('heightCm',{v:heightCm});
+  const wtEl=$('wtHeight'); heightCm=wtEl?(+wtEl.value||160):heightCm;
   $('wtMonthLabel').textContent=wtYear+'年'+(wtMonth+1)+'月';
   const first=new Date(wtYear,wtMonth,1);
   const startDow=(first.getDay()+6)%7;
