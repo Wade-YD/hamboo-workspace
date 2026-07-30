@@ -1,5 +1,5 @@
 // Service Worker - PWA 离线缓存
-const CACHE = 'hamboo-ws-v1';
+const CACHE = 'hamboo-ws-v2';
 const URLS = ['/', '/index.html', '/supabase.js', '/supabase.min.js', '/auth.js', '/db.js', '/chart.umd.min.js', '/manifest.json', '/sw.js'];
 
 self.addEventListener('install', e => {

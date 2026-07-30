@@ -343,6 +343,8 @@
 .auth-switch a{color:var(--ink);cursor:pointer;text-decoration:underline}
 .auth-loading{font-size:14px;color:var(--sub);font-family:var(--hw);letter-spacing:1px}
 #app-content.hidden{display:none}
+#sync-status.offline{background:#fff3cd;color:#856404}
+#sync-status.syncing{background:#cce5ff;color:#004085}
 </style>
 </head>
 <body>
@@ -742,6 +744,9 @@
     </div>
   </div>
 </main>
+<div id="sync-status" style="position:fixed;bottom:0;left:0;right:0;z-index:100;text-align:center;padding:6px;font-size:12px;font-family:inherit;transition:all .3s;background:#f0f0f0;color:#666;">
+  在线 · 数据已同步
+</div>
 
 <script src="supabase.js"></script>
 <script src="db.js"></script>
