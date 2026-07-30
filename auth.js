@@ -68,7 +68,11 @@ async function authSubmit() {
     }
     // 登录成功，onAuthStateChange 自动触发
   } catch (e) {
-    errEl.textContent = '网络错误，请检查连接后重试';
+    if (e.message && (e.message.includes('fetch failed') || e.message.includes('NetworkError') || e.message.includes('network'))) {
+      errEl.textContent = '网络连接失败，请检查网络后重试';
+    } else {
+      errEl.textContent = '服务连接异常，请检查配置或稍后重试（' + (e.message || '未知错误') + '）';
+    }
     resetBtn();
   }
 }
