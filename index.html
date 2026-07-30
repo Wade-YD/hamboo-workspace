@@ -1672,21 +1672,7 @@ function lightNav(d){ lightIdx=(lightIdx+d+lightImgs.length)%lightImgs.length; s
 function closeLight(){ $('light').style.display='none'; }
 
 /* ================= 数据备份与恢复 ================= */
-async function exportBackup(){alert("云同步模式下无需手动备份，数据已自动同步到 Supabase 云端。\n三端（iPad/iPhone/PC）打开同一网址即可查看。");}{
-  const keys=['wb_todos','wb_accounts','wb_metrics','wb_ideas','wb_diet','wb_diet_favs','wb_ledger','wb_weight','wb_height','wb_budget','wb_photos','wb_seed_fans_v1','wb_seed_v2','wb_seed_v3'];
-  const data={app:'hamboo-workbench',version:1,exportedAt:new Date().toISOString(),data:{},photos:[]};
-  keys.forEach(k=>{
-    const raw=localStorage.getItem(k); if(raw===null) return;
-    try{ data.data[k]=JSON.parse(raw); }catch(e){ data.data[k]=raw; }
-  });
-  try{ const ps=await PhotoDB.all(); if(Array.isArray(ps)) data.photos=ps; }catch(e){ data.photos=[]; }
-  const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
-  const url=URL.createObjectURL(blob);
-  const a=document.createElement('a');
-  a.href=url; a.download='hamboo-backup-'+todayStr()+'.json';
-  document.body.appendChild(a); a.click(); a.remove();
-  setTimeout(()=>URL.revokeObjectURL(url),2000);
-}
+async function exportBackup(){alert("云同步模式下无需手动备份，数据已自动同步到 Supabase 云端。\n三端（iPad/iPhone/PC）打开同一网址即可查看。");}
 async function importBackup(file){
   if(!file) return;
   if(!confirm('导入将覆盖当前全部数据，确定继续？')){ $('backupFile').value=''; return; }
