@@ -77,18 +77,25 @@ async function authSubmit() {
   }
 }
 
-// 监听认证状态
-supabase.auth.onAuthStateChange(async (event, session) => {
-  if (session) {
-    document.getElementById('auth-overlay').classList.add('hidden');
-    document.getElementById('app-content').classList.remove('hidden');
-    await initCloudData();
-  } else {
-    document.getElementById('auth-overlay').classList.remove('hidden');
-    document.getElementById('app-content').classList.add('hidden');
-  }
+// 监听认证状态：仅处理 SIGNED_IN（全新登录）。
+// INITIAL_SESSION（页面加载时已有会话）由 db.js 的 DOMContentLoaded 路径处理；
+// TOKEN_REFRESHED 等事件直接忽略，避免每小时全量 initCloudData。
+supabase.auth.onAuthStateChange((event, session) => {
+  if (event !== 'SIGNED_IN' || !session) return;
+  if (cloudDataReady) return; // 去重：标志在 db.js，防止与 DOMContentLoaded 路径重复初始化
+
+  document.getElementById('auth-overlay').classList.add('hidden');
+  document.getElementById('app-content').classList.remove('hidden');
+  initCloudData().then(() => enableRealtime());
 });
 
+// 登出：signOut 成功后先执行清理（关 Realtime、清本地缓存/队列、重置内存数据），再回到登录页
 async function logout() {
-  await supabase.auth.signOut();
+  try {
+    await supabase.auth.signOut();
+  } catch (e) { /* 即使接口失败也执行本地清理 */ }
+  await resetCloudState(); // db.js 提供的清理钩子
+
+  document.getElementById('auth-overlay').classList.remove('hidden');
+  document.getElementById('app-content').classList.add('hidden');
 }

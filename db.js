@@ -105,42 +105,67 @@ async function cloudLoad(module, defaultVal = null) {
   return cached !== null ? cached : defaultVal;
 }
 
-async function cloudSave(module, value) {
+// 清除某模块的所有待同步队列条目
+async function removeQueuedFor(module) {
+  try {
+    const queue = await getQueue();
+    for (const item of queue) {
+      if (item.module === module) await clearQueueItem(item.id);
+    }
+  } catch(e) { /* silent */ }
+}
+
+// 统一写入路径：写本地缓存 → 在线 upsert 云端 → 失败入队 / 成功清队列
+// fromQueue=true 表示来自队列重放（processQueue），失败时不重复入队，由调用方保留原条目
+async function syncModule(module, value, fromQueue = false) {
   // 立即写入本地缓存
   await setCached(module, value);
-  
-  if (isOnline()) {
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-      
-      // 先查询是否已有记录
-      const { data: existing } = await supabase
-        .from('workspace_data')
-        .select('id')
-        .eq('user_id', user.id)
-        .eq('module', module)
-        .maybeSingle();
-      
-      if (existing) {
-        await supabase.from('workspace_data')
-          .update({ data: value, updated_at: new Date().toISOString() })
-          .eq('id', existing.id);
-      } else {
-        await supabase.from('workspace_data')
-          .insert({ user_id: user.id, module, data: value, updated_at: new Date().toISOString() });
-      }
-    } catch(e) {
-      // 在线写入失败，加入离线队列
-      console.warn('cloudSave online failed, queuing:', module, e.message);
-      await addToQueue(module, value);
-    }
-  } else {
-    // 离线：加入同步队列
-    await addToQueue(module, value);
+
+  if (!isOnline()) {
+    // 离线：加入同步队列（队列条目含 ts 时间戳）
+    if (!fromQueue) await addToQueue(module, value);
+    updateOnlineStatus();
+    return false;
   }
-  
-  updateOnlineStatus();
+
+  try {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      if (!fromQueue) await addToQueue(module, value);
+      updateOnlineStatus();
+      return false;
+    }
+
+    // supabase-js 不抛异常，必须显式解构检查 error
+    const { error } = await supabase
+      .from('workspace_data')
+      .upsert(
+        { user_id: user.id, module, data: value, updated_at: new Date().toISOString() },
+        { onConflict: 'user_id,module' }
+      );
+
+    if (error) {
+      console.warn('syncModule failed, queuing:', module, error.message);
+      if (!fromQueue) await addToQueue(module, value);
+      updateOnlineStatus();
+      return false;
+    }
+
+    // 写入成功：本次已写入最新值，该模块更早的待同步条目可清除（队列重放时由 processQueue 逐条清除）
+    if (!fromQueue) await removeQueuedFor(module);
+    updateOnlineStatus();
+    return true;
+  } catch(e) {
+    console.warn('syncModule exception, queuing:', module, e.message);
+    if (!fromQueue) await addToQueue(module, value);
+    updateOnlineStatus();
+    return false;
+  }
+}
+
+async function cloudSave(module, value) {
+  // 对外入口保持签名与行为不变，统一转发到 syncModule
+  return syncModule(module, value);
 }
 
 // ====== 同步队列处理 ======
@@ -150,39 +175,45 @@ async function processQueue() {
   if (syncInProgress || !isOnline()) return;
   syncInProgress = true;
   updateOnlineStatus();
-  
+
   try {
     const queue = await getQueue();
     if (queue.length === 0) { syncInProgress = false; updateOnlineStatus(); return; }
-    
+
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) { syncInProgress = false; return; }
-    
+
+    // 按入队时间升序重放，保证同模块最新值最后写入
+    queue.sort((a, b) => (a.ts || 0) - (b.ts || 0));
+
     for (const item of queue) {
+      // 重放前对比云端 updated_at：云端较新则丢弃本地条目（以云端为准）
       try {
         const { data: existing } = await supabase
           .from('workspace_data')
-          .select('id')
+          .select('updated_at')
           .eq('user_id', user.id)
           .eq('module', item.module)
           .maybeSingle();
-        
-        if (existing) {
-          await supabase.from('workspace_data')
-            .update({ data: item.value, updated_at: new Date().toISOString() })
-            .eq('id', existing.id);
-        } else {
-          await supabase.from('workspace_data')
-            .insert({ user_id: user.id, module: item.module, data: item.value, updated_at: new Date().toISOString() });
+
+        if (existing && existing.updated_at && item.ts &&
+            new Date(existing.updated_at) > new Date(item.ts)) {
+          await clearQueueItem(item.id);
+          continue;
         }
-        await clearQueueItem(item.id);
-      } catch(e) {
-        console.warn('Queue item failed:', item.module, e.message);
-        break; // 失败则停止，保留剩余队列等下次重试
+      } catch(e) { /* 时间戳对比失败则继续尝试覆盖 */ }
+
+      const ok = await syncModule(item.module, item.value, true);
+      if (!ok) {
+        // 写入失败：保留条目并中止本轮，等下次重试
+        syncInProgress = false;
+        updateOnlineStatus();
+        return;
       }
+      await clearQueueItem(item.id);
     }
   } catch(e) { /* silent */ }
-  
+
   syncInProgress = false;
   updateOnlineStatus();
 }
@@ -216,9 +247,15 @@ function updateOnlineStatus() {
 }
 
 // ====== 初始化：从云端加载所有数据 ======
+// 去重标志：防止 auth.js 的 SIGNED_IN 路径与本文件 DOMContentLoaded 路径重复初始化（登出时在 resetCloudState 中重置）
+let cloudDataReady = false;
+
 async function initCloudData() {
+  if (cloudDataReady) return;
+  cloudDataReady = true;
+
   const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return;
+  if (!user) { cloudDataReady = false; return; }
 
   const [t, a, m, i, d, l, w, h, b] = await Promise.all([
     cloudLoad('todos', []),
@@ -261,14 +298,49 @@ async function initCloudData() {
   }
 
   if (typeof renderAll === 'function') renderAll();
+  // 通知 index.html 解除启动加载锁（云数据已就绪，写操作可放开）
+  if (typeof window.__onCloudReady === 'function') window.__onCloudReady();
 }
 
 // ====== 实时同步监听 ======
+let realtimeChannel = null;
+
+// 读取 index.html 侧的内存模块变量（db.js 与其共享全局词法作用域）
+function getLocalModule(module) {
+  switch (module) {
+    case 'todos': return todos;
+    case 'accounts': return accounts;
+    case 'metrics': return metrics;
+    case 'ideas': return ideas;
+    case 'diets': return diets;
+    case 'ledger': return ledger;
+    case 'weights': return weights;
+    case 'heightCm': return { v: heightCm };
+    case 'budget': return budget;
+  }
+  return undefined;
+}
+
+function setLocalModule(module, value) {
+  switch (module) {
+    case 'todos': todos = value || []; break;
+    case 'accounts': accounts = value; break;
+    case 'metrics': metrics = value || []; break;
+    case 'ideas': ideas = value || []; break;
+    case 'diets': diets = value || []; break;
+    case 'ledger': ledger = value || []; break;
+    case 'weights': weights = value || []; break;
+    case 'heightCm': heightCm = value?.v || 160; break;
+    case 'budget': budget = value; break;
+  }
+}
+
 function enableRealtime() {
+  if (realtimeChannel) return; // 防止重复订阅
   supabase.auth.getUser().then(({ data: { user } }) => {
     if (!user) return;
-    
-    supabase
+
+    realtimeChannel = supabase
       .channel('workspace-changes')
       .on('postgres_changes', {
         event: '*',
@@ -278,23 +350,46 @@ function enableRealtime() {
       }, async (payload) => {
         const module = payload.new?.module || payload.old?.module;
         if (!module) return;
-        
+
+        // 回声消除：推送内容与本地一致（自己保存触发的事件）则不渲染
+        if (payload.new && JSON.stringify(payload.new.data) === JSON.stringify(getLocalModule(module))) return;
+
         const fresh = await cloudLoad(module);
-        switch (module) {
-          case 'todos': todos = fresh || []; break;
-          case 'accounts': accounts = fresh; break;
-          case 'metrics': metrics = fresh || []; break;
-          case 'ideas': ideas = fresh || []; break;
-          case 'diets': diets = fresh || []; break;
-          case 'ledger': ledger = fresh || []; break;
-          case 'weights': weights = fresh || []; break;
-          case 'heightCm': heightCm = fresh?.v || 160; break;
-          case 'budget': budget = fresh; break;
-        }
-        if (typeof renderAll === 'function') renderAll();
+        setLocalModule(module, fresh);
+        // 传模块名，index.html 侧 renderAll 支持可选 module 参数按模块分发（无参时全量）
+        if (typeof renderAll === 'function') renderAll(module);
       })
       .subscribe();
   });
+}
+
+// 关闭实时同步（登出时调用）
+function disableRealtime() {
+  if (realtimeChannel) {
+    const ch = realtimeChannel;
+    realtimeChannel = null;
+    try { supabase.removeChannel(ch); } catch(e) { /* silent */ }
+  }
+}
+
+// 清空本地 IndexedDB（cache + queue 两个 objectStore）
+async function clearLocalData() {
+  try {
+    if (!idb) await initOfflineDB();
+    await idbOp('cache', 'readwrite', s => s.clear());
+    await idbOp('queue', 'readwrite', s => s.clear());
+  } catch(e) { /* silent */ }
+}
+
+// 登出清理钩子（auth.js 在 signOut 成功后调用）
+// 注意：内存模块变量定义在 index.html，db.js 与 initCloudData 一样直接重置这些全局绑定；
+// 若 index.html 新增模块，需同步维护 setLocalModule / getLocalModule / 此处的重置列表
+async function resetCloudState() {
+  cloudDataReady = false;
+  disableRealtime();
+  todos = []; accounts = null; metrics = null; ideas = []; diets = [];
+  ledger = []; weights = []; heightCm = 160; budget = null;
+  await clearLocalData();
 }
 
 // ====== 启动 ======
