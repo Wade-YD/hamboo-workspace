@@ -49,10 +49,10 @@ CREATE POLICY "own_data" ON workspace_data FOR ALL USING (auth.uid() = user_id) 
 ALTER PUBLICATION supabase_realtime ADD TABLE workspace_data;
 
 -- 5. Storage photos bucket 的 RLS 策略（限制到 bucket 内本人目录）
--- 图片路径格式：{user_id}/{timestamp}_{random}.jpg
+-- 图片路径格式：{user_id}/{timestamp}_{random}.jpg（storage.foldername 返回路径段数组，[1] 即 user_id）
 CREATE POLICY "photos_owner_all" ON storage.objects FOR ALL TO authenticated
-  USING (bucket_id = 'photos' AND auth.uid()::text = (storage.folder(name))[1])
-  WITH CHECK (bucket_id = 'photos' AND auth.uid()::text = (storage.folder(name))[1]);
+  USING (bucket_id = 'photos' AND auth.uid()::text = (storage.foldername(name))[1])
+  WITH CHECK (bucket_id = 'photos' AND auth.uid()::text = (storage.foldername(name))[1]);
 
 -- 6. 关闭公开注册
 -- 在 Supabase → Authentication → Sign In / Providers 里关闭 "Allow new users to sign up"
