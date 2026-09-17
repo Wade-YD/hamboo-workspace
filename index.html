@@ -912,6 +912,7 @@ function renderAccCards(){
       <div class="sub">${esc(a.note||'')}</div>
       <div style="margin-top:10px;display:flex;gap:8px;align-items:center">
         ${a.url?`<a href="${safeUrl(a.url)}" target="_blank" rel="noopener">主页 ↗</a>`:''}
+        ${a.platform==='小红书'?`<button class="btn-o btn-sm" title="同步最新粉丝数" onclick="refreshFans('${a.id}',this)">⟳ 同步</button>`:''}
         <button class="btn-o btn-sm" onclick="editAccount('${a.id}')">编辑</button>
         <button class="btn-o btn-sm" onclick="delAccount('${a.id}')">删除</button>
       </div></div>`;
@@ -935,6 +936,40 @@ function delAccount(id){
   if(!confirm('删除该账号？其历史数据也会一并删除')) return;
   accounts=accounts.filter(a=>a.id!==id); metrics=metrics.filter(m=>m.accountId!==id);
   cloudSave('accounts',accounts); cloudSave('metrics',metrics); renderMatrix(); renderHome();
+}
+/* 小红书粉丝一键刷新：调 fans-sync Edge Function（服务端带登录 cookie 抓取并写库）。
+   前端仅更新本地数组用于即时显示，不重复 cloudSave——云端数据经 Realtime/下次 cloudLoad 对齐 */
+const FANS_SYNC_URL='https://qcrgrgiyqxaqzzqrauzl.supabase.co/functions/v1/fans-sync';
+async function refreshFans(accountId, btn){
+  if(btn.disabled) return;
+  const orig=btn.textContent;
+  btn.disabled=true; btn.textContent='⟳ 同步中…';
+  try{
+    const { data:{ session } } = await supabase.auth.getSession();
+    if(!session){ alert('请先登录工作台'); btn.disabled=false; btn.textContent=orig; return; }
+    const r=await fetch(FANS_SYNC_URL,{
+      method:'POST',
+      headers:{ 'Authorization':'Bearer '+session.access_token, 'Content-Type':'application/json' },
+      body:JSON.stringify({accountId})
+    });
+    const j=await r.json().catch(()=>({error:'BAD_RESPONSE'}));
+    if(j.ok){
+      const ex=metrics.find(m=>m.accountId===accountId&&m.date===j.date);
+      if(ex) ex.fans=j.fans;
+      else metrics.push({id:uid(),accountId,date:j.date,fans:j.fans});
+      renderMatrix(); renderHome();
+      btn.textContent='✓ '+fmt(j.fans);
+      setTimeout(()=>{btn.textContent=orig;btn.disabled=false;},2500);
+      return;
+    }
+    btn.disabled=false; btn.textContent=orig;
+    if(j.error==='XHS_AUTH_EXPIRED') alert('小红书登录已过期：请重新扫码登录后，按交接文档「粉丝数刷新」章节更新 Supabase 的 XHS_COOKIE 配置');
+    else if(j.error==='ACCOUNT_NOT_MAPPED') alert('该账号尚未配置主页映射：请按交接文档更新 XHS_ACCOUNTS 配置');
+    else alert('刷新失败'+(j.error?('（'+j.error+'）'):'')+'，可手动录入');
+  }catch(e){
+    btn.disabled=false; btn.textContent=orig;
+    alert('网络错误，请稍后再试');
+  }
 }
 function saveMetric(){
   const accountId=$('mAcc').value, date=$('mDate').value||todayStr();
