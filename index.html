@@ -769,6 +769,8 @@ body[data-loading] #app-content::after{content:'数据加载中…';position:fix
 const $=id=>document.getElementById(id);
 const todayStr=()=>new Date().toLocaleDateString('sv');  // YYYY-MM-DD
 const fmt=n=>n==null||n===''?'-':Number(n).toLocaleString();
+/* ≥1万显示 X.X万（与小红书主页展示一致），否则千分位 */
+const fmtWan=n=>{ if(n==null||n==='')return '-'; const v=Number(n); return v>=10000 ? (Math.round(v/1000)/10).toLocaleString()+'万' : v.toLocaleString(); };
 
 function load(key, defaultVal) {
   try { const raw = localStorage.getItem(key); return raw ? JSON.parse(raw) : defaultVal; }
@@ -908,7 +910,7 @@ function renderAccCards(){
       <span class="plat" style="border:1.5px solid var(--ink)">${esc(a.platform)}</span>
       <span class="tag ${statusTag(a.status)}" style="float:right">${esc(a.status)}</span>
       <div class="name">${esc(a.name)}</div>
-      <div class="fans">${lm&&lm.fans!=null?fmt(lm.fans):'<span style="font-size:14px;color:var(--sub)">待录入</span>'} <span style="font-size:12px;font-weight:400;color:var(--sub)">粉丝</span></div>
+      <div class="fans">${lm&&lm.fans!=null?fmt(lm.fans):'<span style="font-size:14px;color:var(--sub)">待录入</span>'} <span style="font-size:12px;font-weight:400;color:var(--sub)">粉丝</span>${lm&&lm.likedTotal!=null?' <span style="color:var(--line)">·</span> <span style="font-size:20px">'+fmtWan(lm.likedTotal)+'</span> <span style="font-size:12px;font-weight:400;color:var(--sub)">赞藏</span>':''}</div>
       <div class="sub">${esc(a.note||'')}</div>
       <div style="margin-top:10px;display:flex;gap:8px;align-items:center">
         ${a.url?`<a href="${safeUrl(a.url)}" target="_blank" rel="noopener">主页 ↗</a>`:''}
@@ -955,8 +957,8 @@ async function refreshFans(accountId, btn){
     const j=await r.json().catch(()=>({error:'BAD_RESPONSE'}));
     if(j.ok){
       const ex=metrics.find(m=>m.accountId===accountId&&m.date===j.date);
-      if(ex) ex.fans=j.fans;
-      else metrics.push({id:uid(),accountId,date:j.date,fans:j.fans});
+      if(ex){ ex.fans=j.fans; if(j.likedTotal!=null) ex.likedTotal=j.likedTotal; }
+      else metrics.push({id:uid(),accountId,date:j.date,fans:j.fans,likedTotal:j.likedTotal});
       renderMatrix(); renderHome();
       btn.textContent='✓ '+fmt(j.fans);
       setTimeout(()=>{btn.textContent=orig;btn.disabled=false;},2500);
