@@ -911,7 +911,7 @@ function renderAccCards(){
       <span class="tag ${statusTag(a.status)}" style="float:right">${esc(a.status)}</span>
       <div class="name">${esc(a.name)}</div>
       <div class="fans">${lm&&lm.fans!=null?fmt(lm.fans):'<span style="font-size:14px;color:var(--sub)">待录入</span>'} <span style="font-size:12px;font-weight:400;color:var(--sub)">粉丝</span>${lm&&lm.likedTotal!=null?' <span style="color:var(--line)">·</span> <span style="font-size:20px">'+fmtWan(lm.likedTotal)+'</span> <span style="font-size:12px;font-weight:400;color:var(--sub)">赞藏</span>':''}</div>
-      <div class="sub">${esc(a.note||'')}</div>
+      ${a.note?`<div class="sub">${esc(a.note)}</div>`:''}
       <div style="margin-top:10px;display:flex;gap:8px;align-items:center">
         ${a.url?`<a href="${safeUrl(a.url)}" target="_blank" rel="noopener">主页 ↗</a>`:''}
         ${a.platform==='小红书'?`<button class="btn-o btn-sm" title="同步最新粉丝数" onclick="refreshFans('${a.id}',this)">⟳ 同步</button>`:''}
@@ -946,14 +946,18 @@ async function refreshFans(accountId, btn){
   if(btn.disabled) return;
   const orig=btn.textContent;
   btn.disabled=true; btn.textContent='⟳ 同步中…';
+  const ctrl=new AbortController();
+  const timer=setTimeout(()=>ctrl.abort(),15000); // 设计 D6：15 秒超时
   try{
     const { data:{ session } } = await supabase.auth.getSession();
     if(!session){ alert('请先登录工作台'); btn.disabled=false; btn.textContent=orig; return; }
     const r=await fetch(FANS_SYNC_URL,{
       method:'POST',
       headers:{ 'Authorization':'Bearer '+session.access_token, 'Content-Type':'application/json' },
-      body:JSON.stringify({accountId})
+      body:JSON.stringify({accountId}),
+      signal:ctrl.signal
     });
+    clearTimeout(timer);
     const j=await r.json().catch(()=>({error:'BAD_RESPONSE'}));
     if(j.ok){
       const ex=metrics.find(m=>m.accountId===accountId&&m.date===j.date);
@@ -965,12 +969,13 @@ async function refreshFans(accountId, btn){
       return;
     }
     btn.disabled=false; btn.textContent=orig;
-    if(j.error==='XHS_AUTH_EXPIRED') alert('小红书登录已过期：请重新扫码登录后，按交接文档「粉丝数刷新」章节更新 Supabase 的 XHS_COOKIE 配置');
+    if(j.error==='XHS_AUTH_EXPIRED') alert('小红书登录已过期：请重新扫码登录后，按交接文档「四点六、粉丝数一键刷新」章节更新 Supabase 的 XHS_COOKIE 配置');
     else if(j.error==='ACCOUNT_NOT_MAPPED') alert('该账号尚未配置主页映射：请按交接文档更新 XHS_ACCOUNTS 配置');
     else alert('刷新失败'+(j.error?('（'+j.error+'）'):'')+'，可手动录入');
   }catch(e){
+    clearTimeout(timer);
     btn.disabled=false; btn.textContent=orig;
-    alert('网络错误，请稍后再试');
+    alert(e.name==='AbortError'?'同步超时（15 秒），请稍后再试或手动录入':'网络错误，请稍后再试');
   }
 }
 function saveMetric(){

@@ -5,3 +5,4 @@
 # 实验临时文件
 *.html.bak
 test_*.html
+supabase/secrets.env
