@@ -5,4 +5,7 @@
 # 实验临时文件
 *.html.bak
 test_*.html
-supabase/secrets.envsupabase/.temp/
+
+# Supabase 敏感与临时文件
+supabase/secrets.env
+supabase/.temp/
